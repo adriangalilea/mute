@@ -1,0 +1,10 @@
+[project]
+name = "mute"
+version = "0.0.1"
+description = "Mute distractions"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "adrian-utils>=0.1.1",
+    "rumps>=0.4.0",
+]

@@ -1,0 +1,39 @@
+# Mute Blocklist
+# Edit this file to customize which sites to block
+# One domain per line, # for comments
+# Subdomains are separate entries (e.g., www.example.com and example.com)
+
+# Social Media
+twitter.com
+www.twitter.com
+x.com
+www.x.com
+facebook.com
+www.facebook.com
+instagram.com
+www.instagram.com
+linkedin.com
+www.linkedin.com
+
+# Discussion/Forums
+reddit.com
+www.reddit.com
+old.reddit.com
+news.ycombinator.com
+
+# Video Streaming
+youtube.com
+www.youtube.com
+m.youtube.com
+netflix.com
+www.netflix.com
+twitch.tv
+www.twitch.tv
+
+# Short-form Video
+tiktok.com
+www.tiktok.com
+
+# Chat/Gaming
+discord.com
+www.discord.com
