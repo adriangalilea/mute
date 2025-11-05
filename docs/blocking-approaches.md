@@ -266,3 +266,182 @@ WireGuard uses **virtual network interfaces** (`utun` devices), not packet filte
 - ❌ Need menu bar UI crate (more research needed)
 
 **Decision:** Not yet made. Python implementation works. May revisit Rust for better code quality and maintainability.
+
+---
+
+## The Real Solution: Network Extension API
+
+### Why Focus/1Blocker Preserve Private Relay
+
+Apps like Focus ($20-40) and 1Blocker preserve Private Relay because they use **Apple's Network Extension Framework** instead of Unix pfctl:
+
+- `NEDNSProxyProvider` - DNS-level filtering that coexists with Private Relay
+- `NEFilterDataProvider` - Packet-level filtering, Apple's intended API
+
+**Key insight:** Apps using Network Extensions with Apple's URLSession/NWConnection APIs don't conflict with Private Relay. When data goes through a Network Extension, Private Relay automatically steps back by design. Apple wants developers to use their APIs, not raw pfctl.
+
+### Why pfctl Breaks Private Relay
+
+**pfctl (Unix approach):**
+- Operates at kernel packet filter level
+- Conflicts with Private Relay's routing
+- SelfControl, Cold Turkey, Murus all break Private Relay
+
+**Network Extension (Apple approach):**
+- Integrates with macOS networking stack
+- Designed to coexist with system services
+- Focus, 1Blocker, AdGuard all preserve Private Relay
+
+### Implementation: DNS Proxy Extension (Recommended)
+
+**Simplest approach** - intercepts DNS before browsers can use DoH:
+
+```swift
+import NetworkExtension
+
+class DistractionBlockerDNSProxy: NEDNSProxyProvider {
+    let blockedDomains = ["facebook.com", "twitter.com", "reddit.com"]
+
+    override func startProxy(options: [String : Any]?,
+                            completionHandler: @escaping (Error?) -> Void) {
+        // Start DNS proxy
+        completionHandler(nil)
+    }
+
+    override func handleNewFlow(_ flow: NEAppProxyFlow) -> Bool {
+        guard let hostname = flow.remoteHostname else { return true }
+
+        // Check against blocklist
+        if blockedDomains.contains(hostname) {
+            return false  // Drop DNS request
+        }
+
+        return true  // Allow request
+    }
+}
+```
+
+**Pros:**
+- ✅ Preserves Private Relay
+- ✅ Blocks before DNS-over-HTTPS
+- ✅ System-wide (all apps/browsers)
+- ✅ ~200 lines of Swift
+
+**Cons:**
+- Requires Network Extension entitlement (Apple Developer account, $99/year)
+- Needs signing & notarization
+- Domain-based only (not IP-based)
+
+### Alternative: Content Filter Extension
+
+**More powerful** - can inspect/filter packets after DNS:
+
+```swift
+import NetworkExtension
+
+class DistractionBlockerFilter: NEFilterDataProvider {
+    override func handleNewFlow(_ flow: NEFilterFlow) -> NEFilterNewFlowVerdict {
+        guard let socketFlow = flow as? NEFilterSocketFlow else {
+            return .allow()
+        }
+
+        // Check hostname or IP
+        if isDistractingSite(socketFlow.remoteHostname) {
+            return .drop()
+        }
+
+        return .allow()
+    }
+}
+```
+
+**Pros:**
+- ✅ Preserves Private Relay
+- ✅ Domain AND IP filtering
+- ✅ More granular control
+- ✅ Can inspect traffic patterns
+
+**Cons:**
+- More complex (~500 lines)
+- Higher performance overhead
+- Still needs entitlements
+
+### Requirements
+
+**Entitlements needed:**
+```xml
+<key>com.apple.developer.networking.networkextension</key>
+<array>
+    <string>dns-proxy</string>
+    <!-- or -->
+    <string>content-filter-provider</string>
+</array>
+```
+
+**Apple Developer Program:**
+- $99/year
+- Legitimate use case (distraction blocker)
+- Apple approves these for content filtering apps
+
+**No sudo needed:**
+- Network Extensions are system extensions
+- Installed via System Settings
+- Managed by macOS, clean lifecycle
+
+### Real-World Examples
+
+**Apps using Network Extension (preserve Private Relay):**
+- Focus - distraction blocker
+- 1Blocker - content blocker
+- AdGuard - uses NEDNSProxyProvider ([open source](https://github.com/AdguardTeam/AdguardForMac))
+
+**Apps using pfctl (break Private Relay):**
+- SelfControl - ancient approach
+- Cold Turkey - also pfctl
+- Murus - direct pfctl manipulation
+
+### Migration Path
+
+**Phase 1: Current (Temporary)**
+- Python + pfctl subprocess
+- Works but disables Private Relay
+- Use for quick testing/validation
+
+**Phase 2: Swift + Network Extension (Planned)**
+- NEDNSProxyProvider for DNS filtering
+- Preserves Private Relay
+- Proper macOS integration
+- ~200-300 lines Swift
+
+**Phase 3: Polish (Optional)**
+- NEFilterDataProvider if DNS insufficient
+- Native SwiftUI menu bar
+- Signing + notarization workflow
+
+### Resources
+
+- [NEDNSProxyProvider docs](https://developer.apple.com/documentation/networkextension/nednsproxyprovider)
+- [NEFilterDataProvider docs](https://developer.apple.com/documentation/networkextension/nefilterdataprovider)
+- [AdGuard open source implementation](https://github.com/AdguardTeam/AdguardForMac)
+- Network Extension entitlement request: Apple Developer portal
+
+### Decision
+
+**Recommendation:** Swift + NEDNSProxyProvider
+
+**Why not keep pfctl:**
+1. Breaks Private Relay (deal-breaker)
+2. Requires sudo (bad UX)
+3. Text parsing is fragile
+4. Not the Apple way
+
+**Why not Rust + pfctl-rs:**
+1. Still breaks Private Relay (same pfctl limitation)
+2. Need menu bar UI anyway (might as well go full Swift)
+3. Network Extension is the proper solution
+
+**Next steps:**
+1. Use Python+pfctl for immediate needs (days/weeks)
+2. Research NEDNSProxyProvider implementation
+3. Prototype Swift Network Extension
+4. Sign up for Apple Developer Program when ready to deploy

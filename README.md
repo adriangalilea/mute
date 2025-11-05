@@ -2,20 +2,38 @@
 
 Mute distractions.
 
+## Current Implementation
+
+**Status:** Temporary pfctl-based blocking (Python)
+
+**Works but has critical limitations:**
+- ✅ Kernel-level blocking (actually stops browsers)
+- ❌ **Disables Apple Private Relay** (pfctl limitation)
+- ❌ Python subprocess (non-type-safe, text parsing)
+
+**Planned:** Swift rewrite with Network Extension API (the proper Apple way)
+
 ## Alternatives
 
-- **SelfControl** - dated, unmaintained
-- **Focus Firewall** - closed source, paid
-- **Mute** - simple, open source, hosts-based blocking
+- **SelfControl** - dated pfctl approach, breaks Private Relay
+- **Focus** - uses Network Extension, preserves Private Relay (proprietary, $20-40)
+- **1Blocker** - uses Network Extension, preserves Private Relay (proprietary)
+- **Mute** - open source, currently pfctl (temporary), moving to Network Extension
 
-## Libraries
+## Why Network Extension?
 
-- [rumps](https://github.com/jaredks/rumps) - traditional macOS menubar apps
-- [stackit](https://github.com/Bbalduzz/stackit) - modern SwiftUI-inspired framework
+Apps like Focus and 1Blocker preserve Private Relay because they use Apple's Network Extension Framework:
+- `NEDNSProxyProvider` - DNS-level filtering, coexists with Private Relay
+- `NEFilterDataProvider` - Packet-level filtering, Apple's intended API
 
-## Usage
+**pfctl (Unix approach)** conflicts with Private Relay at kernel level.
+**Network Extension (Apple approach)** integrates properly with macOS networking stack.
 
-Requires sudo to modify `/etc/hosts`. Use `-E` flag to preserve environment variables:
+See [docs/blocking-approaches.md](docs/blocking-approaches.md) for full technical research.
+
+## Current Usage
+
+Requires sudo for pfctl manipulation. **Warning: Disables Private Relay while active.**
 
 ```bash
 sudo -E uv run python main.py
@@ -26,17 +44,6 @@ sudo -E uv run python main.py
 Edit `~/.config/mute/blocklist.txt` (or `$XDG_CONFIG_HOME/mute/blocklist.txt`) to customize blocked domains. One domain per line.
 
 On first run, the template from the repo is copied to your config directory.
-
-## Known Limitations
-
-**Current approach (hosts file) doesn't block modern browsers:**
-- Safari/Chrome/Firefox bypass via DNS-over-HTTPS
-- Browser caching + persistent connections
-- Only blocks terminal tools (curl, wget)
-
-**Next step:** Testing pfctl-based approach (kernel-level IP blocking)
-
-**If pfctl proves insufficient:** See [blocking-approaches.md](docs/blocking-approaches.md) for research on Network Extension alternatives (requires Swift development)
 
 ## TODO
 
