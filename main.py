@@ -245,21 +245,28 @@ class MuteApp(rumps.App):
 
             if anchor_line not in pf_conf_content:
                 print("📝 Adding mute anchor to pf.conf...")
-                # Add anchor before the first rdr-anchor or at the end
+                # Add anchor after dummynet-anchor, before filtering anchors
+                # Order: scrub > nat > rdr > dummynet > [OUR ANCHOR] > filtering
                 lines = pf_conf_content.split('\n')
                 insert_pos = len(lines)
 
+                # Try to insert after dummynet-anchor
                 for i, line in enumerate(lines):
-                    if line.strip().startswith("rdr-anchor") or line.strip().startswith("anchor "):
-                        insert_pos = i
+                    if line.strip().startswith("dummynet-anchor"):
+                        insert_pos = i + 1
                         break
+                else:
+                    # Fallback: insert before first filtering anchor
+                    for i, line in enumerate(lines):
+                        if line.strip().startswith("anchor "):
+                            insert_pos = i
+                            break
 
                 lines.insert(insert_pos, anchor_line)
                 PF_CONF.write_text('\n'.join(lines))
                 print("✅ pf.conf updated")
         except Exception as e:
-            print(f"⚠️  Could not update pf.conf: {e}")
-            print("    (This may cause issues, but will try to continue)")
+            raise RuntimeError(f"Failed to update pf.conf: {e}") from e
 
     def _apply_blocks(self) -> bool:
         """Apply pfctl blocking rules"""
