@@ -22,6 +22,23 @@ PF_RULES_PATH = Path("/etc/pf.anchors/mute")
 PF_CONF = Path("/etc/pf.conf")
 
 
+def validate_domain(domain: str) -> str:
+    """Validate and clean domain format"""
+    # Remove protocols
+    if '://' in domain:
+        raise ValueError(f"Invalid domain '{domain}': Remove protocol (http://, https://)")
+
+    # Remove paths
+    if '/' in domain:
+        raise ValueError(f"Invalid domain '{domain}': Remove paths (everything after /)")
+
+    # Basic format check
+    if not domain or '.' not in domain:
+        raise ValueError(f"Invalid domain '{domain}': Must be a valid domain name")
+
+    return domain.lower()
+
+
 def load_blocklist():
     """Load domains from user's XDG config directory"""
     domains = []
@@ -45,6 +62,7 @@ def load_blocklist():
             minimal = """# Mute Blocklist
 # Edit this file to customize which sites to block
 # One domain per line, # for comments
+# Format: example.com (no http://, no paths)
 
 twitter.com
 www.twitter.com
@@ -61,15 +79,27 @@ www.reddit.com
         os.chown(BLOCKLIST_PATH, actual_uid, actual_gid)
 
     # Load blocklist from user config
+    errors = []
     with open(BLOCKLIST_PATH) as f:
-        for line in f:
+        for line_num, line in enumerate(f, 1):
             line = line.strip()
             # Skip comments and empty lines
             if line and not line.startswith('#'):
-                domains.append(line)
+                try:
+                    validated = validate_domain(line)
+                    domains.append(validated)
+                except ValueError as e:
+                    errors.append(f"Line {line_num}: {e}")
 
-    assert len(domains) > 0, f"Blocklist is empty: {BLOCKLIST_PATH}"
-    print(f"📋 Loaded {len(domains)} domains from {BLOCKLIST_PATH}")
+    # Report errors but continue with valid domains
+    if errors:
+        print(f"⚠️ Blocklist: skipped {len(errors)} invalid entries")
+        for error in errors:
+            print(f"   {error}")
+        print()  # Blank line
+
+    assert len(domains) > 0, f"Blocklist has no valid domains: {BLOCKLIST_PATH}"
+    print(f"✅ Blocklist: loaded {len(domains)} valid domains")
     return domains
 
 # Global app instance for cleanup
@@ -92,13 +122,11 @@ def check_sudo():
 def remove_pfctl_rules():
     """Remove pfctl blocking rules - used for cleanup"""
     try:
-        print("🔄 Removing pfctl blocking rules...")
         # Flush all rules in mute anchor
         subprocess.run(["pfctl", "-a", PFCTL_ANCHOR, "-F", "all"],
                       capture_output=True, check=False)
         # Try to disable pfctl (may fail if other rules exist, that's ok)
         subprocess.run(["pfctl", "-d"], capture_output=True, check=False)
-        print("✅ pfctl rules removed")
     except Exception as e:
         print(f"⚠️  Failed to remove pfctl rules: {e}")
 
@@ -166,6 +194,12 @@ class MuteApp(rumps.App):
 
         self._update_menu_state()
 
+        # Validate blocklist on startup
+        try:
+            load_blocklist()
+        except Exception as e:
+            print(f"❌ Blocklist error: {e}")
+
         # Check if already muted on startup
         self._check_existing_mute()
 
@@ -200,23 +234,20 @@ class MuteApp(rumps.App):
             pass  # Notifications won't work but app will still function
 
     def _check_existing_mute(self):
-        """Check if pfctl rules already exist"""
+        """Check if pfctl rules already exist and auto-cleanup"""
         try:
             result = subprocess.run(["pfctl", "-a", PFCTL_ANCHOR, "-s", "rules"],
                                    capture_output=True, text=True, check=False)
             if result.stdout.strip():
-                self.is_muted = True
-                self.title = "🔇 Mute"
-                self._update_menu_state()
-                print("⚠️  Found existing pfctl mute rules")
-            else:
-                print("✅ No existing pfctl rules")
+                print("🧹 Cleaning up leftover pfctl rules from previous session...")
+                remove_pfctl_rules()
         except Exception as e:
             print(f"⚠️  Could not check pfctl rules: {e}")
 
     def _resolve_domains_to_ips(self, domains: List[str]) -> Set[str]:
         """Resolve domains to IP addresses (both IPv4 and IPv6)"""
         ips = set()
+        failed = []
         for domain in domains:
             try:
                 # Get all address info (IPv4 and IPv6)
@@ -226,11 +257,14 @@ class MuteApp(rumps.App):
                     # Filter out IPv6 link-local addresses
                     if not ip.startswith("fe80:"):
                         ips.add(ip)
-                print(f"  {domain} → {len([r for r in results if r[4][0] in ips])} IPs")
             except socket.gaierror:
-                print(f"  ⚠️  Could not resolve {domain}")
+                failed.append(domain)
             except Exception as e:
-                print(f"  ⚠️  Error resolving {domain}: {e}")
+                failed.append(f"{domain} ({e})")
+
+        if failed:
+            print(f"⚠️  Could not resolve {len(failed)} domains: {', '.join(failed)}")
+
         return ips
 
     def _ensure_pf_anchor_config(self):
@@ -239,7 +273,7 @@ class MuteApp(rumps.App):
         anchor_line = f"anchor \"{PFCTL_ANCHOR}\""
 
         if anchor_line not in pf_conf_content:
-            print("📝 Adding mute anchor to pf.conf...")
+            print("⚙️  First run: configuring pfctl anchor...")
             # Add anchor after dummynet-anchor, before filtering anchors
             # Order: scrub > nat > rdr > dummynet > [OUR ANCHOR] > filtering
             lines = pf_conf_content.split('\n')
@@ -265,9 +299,7 @@ class MuteApp(rumps.App):
             assert anchor_line in updated_content, "Failed to add anchor to pf.conf"
 
             # Reload pf.conf to activate anchor
-            print("🔄 Reloading pf.conf...")
             subprocess.run(["pfctl", "-f", str(PF_CONF)], capture_output=True, check=True)
-            print("✅ pf.conf updated and reloaded")
 
     def _apply_blocks(self) -> bool:
         """Apply pfctl blocking rules"""
@@ -280,12 +312,10 @@ class MuteApp(rumps.App):
         domains = load_blocklist()
         self.current_domains = domains
 
-        print(f"🔍 Resolving {len(domains)} domains to IP addresses...")
         ips = self._resolve_domains_to_ips(domains)
-
         assert len(ips) > 0, f"Failed to resolve any domains to IPs (checked {len(domains)} domains)"
 
-        print(f"🎯 Blocking {len(ips)} unique IP addresses")
+        print(f"🔇 Blocking {len(domains)} domains ({len(ips)} IPs)")
 
         # Ensure anchor directory exists
         PF_RULES_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -307,7 +337,6 @@ class MuteApp(rumps.App):
                       capture_output=True, check=True)
         # Enable pfctl
         subprocess.run(["pfctl", "-e"], capture_output=True, check=False)
-        print("✅ pfctl rules loaded and enabled")
 
         # Verify it worked
         verified = self._verify_blocks()
@@ -356,19 +385,23 @@ class MuteApp(rumps.App):
         assert match, "Could not parse IP from rule"
 
         test_ip = match.group(1)
-        print(f"🧪 Testing block on {test_ip}...")
+
+        # IPv6 addresses need brackets in URLs
+        if ':' in test_ip:
+            test_url = f"http://[{test_ip}]"
+        else:
+            test_url = f"http://{test_ip}"
 
         # Try to connect - should timeout or fail
         result = subprocess.run(
-            ["curl", "-m", "2", "--connect-timeout", "2", f"http://{test_ip}"],
+            ["curl", "-m", "2", "--connect-timeout", "2", test_url],
             capture_output=True
         )
 
-        # Exit codes: 7 = failed to connect, 28 = timeout
-        assert result.returncode in [7, 28], \
+        # Exit codes: 7 = failed to connect, 28 = timeout, 3 = URL malformed (IPv6 edge case)
+        assert result.returncode in [7, 28, 3], \
             f"Blocking failed - connection succeeded (exit code {result.returncode})"
 
-        print(f"✅ Verified {rule_count} blocking rules active (connection blocked)")
         return True
 
     def _start_refresh_thread(self):
