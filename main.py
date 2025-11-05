@@ -12,11 +12,12 @@ import threading
 import time
 from pathlib import Path
 from datetime import datetime, timedelta
-from typing import Optional, List, Set
+from typing import Optional, List, Set, Dict
+from configparser import ConfigParser
 from py_utils import xdg
 
-TEMPLATE_PATH = Path(__file__).parent / "blocklist.txt.template"
-BLOCKLIST_PATH = xdg.config / "mute" / "blocklist.txt"
+TEMPLATE_PATH = Path(__file__).parent / "sites.ini.template"
+SITES_INI_PATH = xdg.config / "mute" / "sites.ini"
 PFCTL_ANCHOR = "mute"
 PF_RULES_PATH = Path("/etc/pf.anchors/mute")
 PF_CONF = Path("/etc/pf.conf")
@@ -39,68 +40,69 @@ def validate_domain(domain: str) -> str:
     return domain.lower()
 
 
-def load_blocklist():
-    """Load domains from user's XDG config directory"""
-    domains = []
-
+def load_groups() -> Dict[str, List[str]]:
+    """Load domain groups from INI config"""
     # Get actual user's UID/GID (not root when running with sudo)
     actual_uid = int(os.environ.get('SUDO_UID', os.getuid()))
     actual_gid = int(os.environ.get('SUDO_GID', os.getgid()))
 
     # Ensure config directory exists with correct ownership
-    if not BLOCKLIST_PATH.parent.exists():
-        BLOCKLIST_PATH.parent.mkdir(parents=True, exist_ok=True)
-        os.chown(BLOCKLIST_PATH.parent, actual_uid, actual_gid)
+    if not SITES_INI_PATH.parent.exists():
+        SITES_INI_PATH.parent.mkdir(parents=True, exist_ok=True)
+        os.chown(SITES_INI_PATH.parent, actual_uid, actual_gid)
 
     # Copy template to user config on first run
-    if not BLOCKLIST_PATH.exists():
+    if not SITES_INI_PATH.exists():
         if TEMPLATE_PATH.exists():
-            print(f"📋 First run: copying blocklist template to {BLOCKLIST_PATH}")
-            shutil.copy2(TEMPLATE_PATH, BLOCKLIST_PATH)
+            print(f"📋 First run: copying sites template to {SITES_INI_PATH}")
+            shutil.copy2(TEMPLATE_PATH, SITES_INI_PATH)
         else:
-            print(f"⚠️  Template not found, creating minimal blocklist at {BLOCKLIST_PATH}")
-            minimal = """# Mute Blocklist
-# Edit this file to customize which sites to block
-# One domain per line, # for comments
-# Format: example.com (no http://, no paths)
-
-twitter.com
-www.twitter.com
-facebook.com
-www.facebook.com
-youtube.com
-www.youtube.com
-reddit.com
-www.reddit.com
-"""
-            BLOCKLIST_PATH.write_text(minimal)
+            print(f"⚠️  Template not found, creating minimal config at {SITES_INI_PATH}")
+            minimal_cfg = ConfigParser(allow_no_value=True)
+            minimal_cfg['social'] = {
+                'twitter.com': None,
+                'facebook.com': None,
+                'reddit.com': None
+            }
+            with open(SITES_INI_PATH, 'w') as f:
+                minimal_cfg.write(f)
 
         # Fix ownership so user can edit
-        os.chown(BLOCKLIST_PATH, actual_uid, actual_gid)
+        os.chown(SITES_INI_PATH, actual_uid, actual_gid)
 
-    # Load blocklist from user config
+    # Load groups from INI
+    cfg = ConfigParser(allow_no_value=True)
+    cfg.read(SITES_INI_PATH)
+
+    groups = {}
     errors = []
-    with open(BLOCKLIST_PATH) as f:
-        for line_num, line in enumerate(f, 1):
-            line = line.strip()
-            # Skip comments and empty lines
-            if line and not line.startswith('#'):
-                try:
-                    validated = validate_domain(line)
-                    domains.append(validated)
-                except ValueError as e:
-                    errors.append(f"Line {line_num}: {e}")
+    total_domains = 0
+
+    for section in cfg.sections():
+        domains = []
+        for domain in cfg[section].keys():
+            try:
+                validated = validate_domain(domain)
+                domains.append(validated)
+                total_domains += 1
+            except ValueError as e:
+                errors.append(f"[{section}] {e}")
+
+        if domains:
+            groups[section] = domains
 
     # Report errors but continue with valid domains
     if errors:
-        print(f"⚠️ Blocklist: skipped {len(errors)} invalid entries")
+        print(f"⚠️ Sites: skipped {len(errors)} invalid entries")
         for error in errors:
             print(f"   {error}")
         print()  # Blank line
 
-    assert len(domains) > 0, f"Blocklist has no valid domains: {BLOCKLIST_PATH}"
-    print(f"✅ Blocklist: loaded {len(domains)} valid domains")
-    return domains
+    assert len(groups) > 0, f"No valid groups in config: {SITES_INI_PATH}"
+    assert total_domains > 0, f"No valid domains in any group: {SITES_INI_PATH}"
+
+    print(f"✅ Sites: loaded {total_domains} domains from {len(groups)} groups")
+    return groups
 
 # Global app instance for cleanup
 app_instance = None
@@ -113,9 +115,9 @@ def check_sudo():
     #   - Authorization Services API
     #   - or launchd daemon with proper entitlements
     if os.geteuid() != 0:
-        print("❌ Mute requires sudo privileges to modify /etc/hosts")
-        print("\nUsage: sudo uv run python main.py")
-        print("   or: sudo python main.py")
+        print("❌ Mute requires sudo privileges to modify pfctl rules")
+        print("\nUsage: sudo -E uv run python main.py")
+        print("   or: sudo -E python main.py")
         sys.exit(1)
 
 
@@ -194,11 +196,11 @@ class MuteApp(rumps.App):
 
         self._update_menu_state()
 
-        # Validate blocklist on startup
+        # Validate sites config on startup
         try:
-            load_blocklist()
+            load_groups()
         except Exception as e:
-            print(f"❌ Blocklist error: {e}")
+            print(f"❌ Sites config error: {e}")
 
         # Check if already muted on startup
         self._check_existing_mute()
@@ -308,8 +310,11 @@ class MuteApp(rumps.App):
         # Ensure pf.conf has our anchor configured
         self._ensure_pf_anchor_config()
 
-        # Load domains and resolve to IPs
-        domains = load_blocklist()
+        # Load groups and flatten to domains
+        groups = load_groups()
+        domains = []
+        for group_domains in groups.values():
+            domains.extend(group_domains)
         self.current_domains = domains
 
         ips = self._resolve_domains_to_ips(domains)

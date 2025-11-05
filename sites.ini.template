@@ -1,0 +1,32 @@
+# Mute Sites Configuration
+# Groups of websites to block
+# Add domains one per line under each group
+
+[social]
+twitter.com
+www.twitter.com
+x.com
+www.x.com
+facebook.com
+www.facebook.com
+instagram.com
+www.instagram.com
+linkedin.com
+www.linkedin.com
+
+[video]
+youtube.com
+www.youtube.com
+m.youtube.com
+netflix.com
+www.netflix.com
+twitch.tv
+www.twitch.tv
+tiktok.com
+www.tiktok.com
+
+[news]
+reddit.com
+www.reddit.com
+old.reddit.com
+news.ycombinator.com
