@@ -81,14 +81,13 @@ On first run, the template from the repo is copied to your config directory.
   - Alternative: Pomodoro timer, task list, or meditation prompt
   - Simple HTML/CSS, no fancy frameworks
 
+- **Per-group toggle** - enable/disable individual groups (block only [social], not [video])
+
+- **Scheduled blocking** - auto-activate during work hours (Mon-Fri 9-5), custom schedules in config
+
 - **Prevent easy toggle-off (reduce temptation)**:
   - Add delay before ending session (e.g., 30 second countdown)
   - Require password/confirmation to end early
   - Log all start/end times to shame yourself
   - Optional: Hide "End Session" button entirely (force quit = restore)
   - Consider: App hiding/removal protection
-
-- **Scheduled blocking**:
-  - Auto-activate during work hours (Mon-Fri 9-5)
-  - Per-group toggle (enable/disable categories)
-  - Custom schedules in config file
