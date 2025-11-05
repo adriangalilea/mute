@@ -10,6 +10,7 @@ import shutil
 import socket
 import threading
 import time
+import json
 from pathlib import Path
 from datetime import datetime, timedelta
 from typing import Optional, List, Set, Dict
@@ -18,6 +19,7 @@ from py_utils import xdg
 
 TEMPLATE_PATH = Path(__file__).parent / "sites.ini.template"
 SITES_INI_PATH = xdg.config / "mute" / "sites.ini"
+STATE_PATH = xdg.state / "mute" / "session.json"
 PFCTL_ANCHOR = "mute"
 PF_RULES_PATH = Path("/etc/pf.anchors/mute")
 PF_CONF = Path("/etc/pf.conf")
@@ -103,6 +105,54 @@ def load_groups() -> Dict[str, List[str]]:
 
     print(f"✅ Sites: loaded {total_domains} domains from {len(groups)} groups")
     return groups
+
+
+def save_state(active: bool, session_type: str, start_time: datetime,
+               end_time: Optional[datetime], blocked_groups: List[str]):
+    """Save session state to XDG state directory"""
+    # Get actual user's UID/GID (not root when running with sudo)
+    actual_uid = int(os.environ.get('SUDO_UID', os.getuid()))
+    actual_gid = int(os.environ.get('SUDO_GID', os.getgid()))
+
+    # Ensure state directory exists
+    STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    os.chown(STATE_PATH.parent, actual_uid, actual_gid)
+
+    state = {
+        "active": active,
+        "session_type": session_type,
+        "start_time": start_time.isoformat(),
+        "end_time": end_time.isoformat() if end_time else None,
+        "blocked_groups": blocked_groups
+    }
+
+    STATE_PATH.write_text(json.dumps(state, indent=2))
+    os.chown(STATE_PATH, actual_uid, actual_gid)
+
+
+def load_state() -> Optional[Dict]:
+    """Load session state from XDG state directory"""
+    if not STATE_PATH.exists():
+        return None
+
+    try:
+        state = json.loads(STATE_PATH.read_text())
+        # Parse ISO timestamps back to datetime
+        if state.get("start_time"):
+            state["start_time"] = datetime.fromisoformat(state["start_time"])
+        if state.get("end_time"):
+            state["end_time"] = datetime.fromisoformat(state["end_time"])
+        return state
+    except Exception as e:
+        print(f"⚠️  Failed to load state: {e}")
+        return None
+
+
+def clear_state():
+    """Clear session state file"""
+    if STATE_PATH.exists():
+        STATE_PATH.unlink()
+
 
 # Global app instance for cleanup
 app_instance = None
@@ -236,15 +286,67 @@ class MuteApp(rumps.App):
             pass  # Notifications won't work but app will still function
 
     def _check_existing_mute(self):
-        """Check if pfctl rules already exist and auto-cleanup"""
+        """Check state and restore session or cleanup leftover rules"""
+        state = load_state()
+
+        if state and state.get("active"):
+            # Session was active when app quit - restore it
+            print("🔄 Restoring session from previous run...")
+            self._restore_session(state)
+        else:
+            # No active session - cleanup any leftover pfctl rules
+            try:
+                result = subprocess.run(["pfctl", "-a", PFCTL_ANCHOR, "-s", "rules"],
+                                       capture_output=True, text=True, check=False)
+                if result.stdout.strip():
+                    print("🧹 Cleaning up leftover pfctl rules...")
+                    remove_pfctl_rules()
+                    clear_state()  # Clean up stale state too
+            except Exception as e:
+                print(f"⚠️  Could not check pfctl rules: {e}")
+
+    def _restore_session(self, state: Dict):
+        """Restore session from saved state"""
         try:
-            result = subprocess.run(["pfctl", "-a", PFCTL_ANCHOR, "-s", "rules"],
-                                   capture_output=True, text=True, check=False)
-            if result.stdout.strip():
-                print("🧹 Cleaning up leftover pfctl rules from previous session...")
-                remove_pfctl_rules()
+            # Restore session variables
+            self.is_muted = True
+            self.title = "🔇 Mute"
+            self.end_time = state.get("end_time")
+            session_type = state.get("session_type", "timed")
+
+            # Re-apply blocks (rules already exist in pfctl from previous run)
+            # Load current domains for refresh thread
+            groups = load_groups()
+            domains = []
+            for group_domains in groups.values():
+                domains.extend(group_domains)
+            self.current_domains = domains
+
+            # Update menu state
+            self._update_menu_state()
+
+            # Restart IP refresh thread
+            self._start_refresh_thread()
+
+            # Restart timer if needed
+            if self.end_time:
+                if datetime.now() >= self.end_time:
+                    # Session expired while app was closed
+                    print("⏰ Session expired, ending...")
+                    self.end_session(None)
+                    return
+
+                # Session still active, restart timer
+                if session_type == "until_tomorrow":
+                    self.timer = rumps.Timer(self.update_timer, 60)
+                else:
+                    self.timer = rumps.Timer(self.update_timer, 1)
+                self.timer.start()
+
+            print(f"✅ Session restored ({session_type})")
         except Exception as e:
-            print(f"⚠️  Could not check pfctl rules: {e}")
+            print(f"❌ Failed to restore session: {e}")
+            self.end_session(None)
 
     def _resolve_domains_to_ips(self, domains: List[str]) -> Set[str]:
         """Resolve domains to IP addresses (both IPv4 and IPv6)"""
@@ -463,9 +565,13 @@ class MuteApp(rumps.App):
         # Start background IP refresh thread
         self._start_refresh_thread()
 
+        # Determine session type and times
+        start_time = datetime.now()
+        session_type = "timed"
+
         # Setup timer if duration specified
         if minutes:
-            self.end_time = datetime.now() + timedelta(minutes=minutes)
+            self.end_time = start_time + timedelta(minutes=minutes)
             if self.timer:
                 self.timer.stop()
             self.timer = rumps.Timer(self.update_timer, 1)
@@ -475,17 +581,28 @@ class MuteApp(rumps.App):
             except:
                 print(f"✅ Focus started for {minutes} minutes")
         else:
+            session_type = "until_tomorrow"
             try:
                 rumps.notification("Focus Started", "", "Muting until tomorrow")
             except:
                 print("✅ Focus started until tomorrow")
             # Set end time to 4 AM tomorrow
-            tomorrow = datetime.now() + timedelta(days=1)
+            tomorrow = start_time + timedelta(days=1)
             self.end_time = tomorrow.replace(hour=4, minute=0, second=0, microsecond=0)
             if self.timer:
                 self.timer.stop()
             self.timer = rumps.Timer(self.update_timer, 60)  # Check every minute
             self.timer.start()
+
+        # Save session state
+        groups = load_groups()
+        save_state(
+            active=True,
+            session_type=session_type,
+            start_time=start_time,
+            end_time=self.end_time,
+            blocked_groups=list(groups.keys())
+        )
 
     @rumps.timer(1)
     def update_timer(self, _):
@@ -540,6 +657,10 @@ class MuteApp(rumps.App):
             self.timer = None
 
         self.end_time = None
+
+        # Clear session state
+        clear_state()
+
         try:
             rumps.notification("Focus Ended", "", "Distractions unmuted")
         except:

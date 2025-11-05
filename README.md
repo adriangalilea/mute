@@ -57,6 +57,7 @@ On first run, the template from the repo is copied to your config directory.
 ## TODO
 
 - ✅ **Grouped config format (INI)** - sites.ini with [social], [video], [news] groups
+- ✅ **Persistent sessions** - survives app restarts, restores active blocks mid-session
 
 - **macOS Shortcuts integration**:
   - Create Shortcuts actions for "Start 25min focus", "Start 2hr focus", etc.
@@ -86,10 +87,8 @@ On first run, the template from the repo is copied to your config directory.
   - Optional: Hide "End Session" button entirely (force quit = restore)
   - Consider: App hiding/removal protection
 
-- **Persistent sessions**:
-  - Save session state to survive app restarts
-  - Restore active blocks on startup if mid-session
-  - Forever blocking (no end time)
+- **Forever blocking**:
+  - Add "Forever" menu item (no end time, manual stop only)
 
 - **Scheduled blocking**:
   - Auto-activate during work hours (Mon-Fri 9-5)
