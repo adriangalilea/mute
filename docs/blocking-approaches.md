@@ -460,8 +460,11 @@ class DistractionBlockerFilter: NEFilterDataProvider {
 2. Need menu bar UI anyway (might as well go full Swift)
 3. Network Extension is the proper solution
 
-**Next steps:**
-1. Use Python+pfctl for immediate needs (days/weeks)
-2. Research NEDNSProxyProvider implementation
-3. Prototype Swift Network Extension
-4. Sign up for Apple Developer Program when ready to deploy
+**Current Status (Nov 2025):**
+- ✅ Python+pfctl implementation complete and functional
+- ✅ Grouped config, persistent sessions, forever blocking working
+- ⚠️ Disables Private Relay (pfctl limitation, acceptable for now)
+
+**Future Direction:**
+- **Most likely:** Swift + Network Extension API (proper Apple solution, preserves Private Relay)
+- **Alternative:** Rust + pfctl-rs (if staying with pfctl, better than subprocess)
