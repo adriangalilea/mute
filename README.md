@@ -1,35 +1,32 @@
 # Mute
 
-Mute distractions.
+![macOS](https://img.shields.io/badge/macOS-13%2B-blue?logo=apple)
+![Python](https://img.shields.io/badge/Python-3.12%2B-blue?logo=python)
+![pfctl](https://img.shields.io/badge/pfctl-kernel%20level-orange)
+![License](https://img.shields.io/badge/license-MIT-green)
 
-## Current Implementation
+**Open-source website blocker for macOS using kernel-level pfctl packet filtering.**
 
-**Status:** Temporary pfctl-based blocking (Python)
+Block distracting websites at the network level. No browser extensions, no DNS tricks, no bypasses.
 
-**Works but has critical limitations:**
-- ✅ Kernel-level blocking (actually stops browsers)
-- ❌ **Disables Apple Private Relay** (pfctl limitation)
-- ❌ Python subprocess (non-type-safe, text parsing)
+## How It Works
 
-**Planned:** Swift rewrite with Network Extension API (the proper Apple way)
+**Current:** Python + pfctl (kernel-level packet filtering)
+- ✅ Actually blocks traffic (not just DNS)
+- ✅ Works across all browsers
+- ❌ Disables Apple Private Relay (pfctl limitation)
 
-## Alternatives
+**Why pfctl?** Fast to implement, battle-tested blocking approach. Python chosen for rapid prototyping with `rumps` menu bar library.
 
-- **SelfControl** - dated pfctl approach, breaks Private Relay
-- **Focus** - uses Network Extension, preserves Private Relay (proprietary, $20-40)
-- **1Blocker** - uses Network Extension, preserves Private Relay (proprietary)
-- **Mute** - open source, currently pfctl (temporary), moving to Network Extension
+**Future:** Most likely Native Swift app with Network Extension API
+- Preserves Private Relay (`NEDNSProxyProvider` integrates properly with macOS)
+- No sudo required (proper entitlements)
+- Alternative: Rust + pfctl-rs (if staying with pfctl, better than subprocess)
+- See [docs/blocking-approaches.md](docs/blocking-approaches.md) for full technical research
 
-## Why Network Extension?
-
-Apps like Focus and 1Blocker preserve Private Relay because they use Apple's Network Extension Framework:
-- `NEDNSProxyProvider` - DNS-level filtering, coexists with Private Relay
-- `NEFilterDataProvider` - Packet-level filtering, Apple's intended API
-
-**pfctl (Unix approach)** conflicts with Private Relay at kernel level.
-**Network Extension (Apple approach)** integrates properly with macOS networking stack.
-
-See [docs/blocking-approaches.md](docs/blocking-approaches.md) for full technical research.
+**Alternatives:**
+- **SelfControl** - pfctl, breaks Private Relay
+- **Focus/1Blocker** - Network Extension (proprietary, $20-40)
 
 ## Current Usage
 
