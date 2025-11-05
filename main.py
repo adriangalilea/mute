@@ -7,17 +7,19 @@ import atexit
 import rumps
 import subprocess
 import shutil
+import socket
+import threading
+import time
 from pathlib import Path
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import Optional, List, Set
 from py_utils import xdg
 
-HOSTS_PATH = Path("/etc/hosts")
-HOSTS_BACKUP = Path("/etc/hosts.mute-backup")
 TEMPLATE_PATH = Path(__file__).parent / "blocklist.txt.template"
 BLOCKLIST_PATH = xdg.config / "mute" / "blocklist.txt"
-MUTE_START_MARKER = "# === MUTE START ==="
-MUTE_END_MARKER = "# === MUTE END ==="
+PFCTL_ANCHOR = "mute"
+PF_RULES_PATH = Path("/etc/pf.anchors/mute")
+PF_CONF = Path("/etc/pf.conf")
 
 
 def load_blocklist():
@@ -91,15 +93,18 @@ def check_sudo():
         sys.exit(1)
 
 
-def restore_hosts_from_backup():
-    """Restore hosts file from backup - used for cleanup"""
+def remove_pfctl_rules():
+    """Remove pfctl blocking rules - used for cleanup"""
     try:
-        if HOSTS_BACKUP.exists():
-            print("🔄 Restoring hosts file from backup...")
-            shutil.copy2(HOSTS_BACKUP, HOSTS_PATH)
-            print("✅ Hosts file restored")
+        print("🔄 Removing pfctl blocking rules...")
+        # Flush all rules in mute anchor
+        subprocess.run(["pfctl", "-a", PFCTL_ANCHOR, "-F", "all"],
+                      capture_output=True, check=False)
+        # Try to disable pfctl (may fail if other rules exist, that's ok)
+        subprocess.run(["pfctl", "-d"], capture_output=True, check=False)
+        print("✅ pfctl rules removed")
     except Exception as e:
-        print(f"⚠️  Failed to restore hosts file: {e}")
+        print(f"⚠️  Failed to remove pfctl rules: {e}")
 
 
 def cleanup_handler():
@@ -107,7 +112,10 @@ def cleanup_handler():
     global app_instance
     if app_instance and app_instance.is_muted:
         print("\n🧹 Cleaning up...")
-        restore_hosts_from_backup()
+        remove_pfctl_rules()
+        # Stop refresh thread if running
+        if app_instance.refresh_thread and app_instance.refresh_thread.is_alive():
+            app_instance.stop_refresh = True
 
 
 def signal_handler(sig, frame):
@@ -136,6 +144,11 @@ class MuteApp(rumps.App):
         self.timer = None
         self.end_time: Optional[datetime] = None
         self.is_muted = False
+
+        # Threading for periodic IP refresh
+        self.refresh_thread: Optional[threading.Thread] = None
+        self.stop_refresh = False
+        self.current_domains: List[str] = []
 
         # Store global reference for cleanup
         global app_instance
@@ -191,124 +204,189 @@ class MuteApp(rumps.App):
             pass  # Notifications won't work but app will still function
 
     def _check_existing_mute(self):
-        """Check if hosts file already has mute blocks"""
+        """Check if pfctl rules already exist"""
         try:
-            content = HOSTS_PATH.read_text()
-            if MUTE_START_MARKER in content:
+            result = subprocess.run(["pfctl", "-a", PFCTL_ANCHOR, "-s", "rules"],
+                                   capture_output=True, text=True, check=False)
+            if result.stdout.strip():
                 self.is_muted = True
                 self.title = "🔇 Mute"
                 self._update_menu_state()
-                print("⚠️  Found existing mute blocks in hosts file")
+                print("⚠️  Found existing pfctl mute rules")
             else:
-                print("✅ Hosts file is clean")
+                print("✅ No existing pfctl rules")
         except Exception as e:
-            print(f"⚠️  Could not check hosts file: {e}")
+            print(f"⚠️  Could not check pfctl rules: {e}")
 
-    def _create_backup(self) -> bool:
-        """Create backup of clean hosts file if it doesn't exist"""
-        try:
-            # Only create backup if it doesn't exist or if current hosts has no mute blocks
-            if not HOSTS_BACKUP.exists():
-                current = HOSTS_PATH.read_text()
-                if MUTE_START_MARKER not in current:
-                    shutil.copy2(HOSTS_PATH, HOSTS_BACKUP)
-                    print("📦 Created hosts backup")
-                else:
-                    # Current hosts is dirty, try to clean it first
-                    print("⚠️  Current hosts file has mute blocks, cleaning first...")
-                    self._clean_hosts()
-                    shutil.copy2(HOSTS_PATH, HOSTS_BACKUP)
-            return True
-        except Exception as e:
-            print(f"Failed to backup hosts: {e}")
-            return False
+    def _resolve_domains_to_ips(self, domains: List[str]) -> Set[str]:
+        """Resolve domains to IP addresses (both IPv4 and IPv6)"""
+        ips = set()
+        for domain in domains:
+            try:
+                # Get all address info (IPv4 and IPv6)
+                results = socket.getaddrinfo(domain, None)
+                for result in results:
+                    ip = result[4][0]
+                    # Filter out IPv6 link-local addresses
+                    if not ip.startswith("fe80:"):
+                        ips.add(ip)
+                print(f"  {domain} → {len([r for r in results if r[4][0] in ips])} IPs")
+            except socket.gaierror:
+                print(f"  ⚠️  Could not resolve {domain}")
+            except Exception as e:
+                print(f"  ⚠️  Error resolving {domain}: {e}")
+        return ips
 
-    def _clean_hosts(self):
-        """Remove any existing mute blocks from hosts file"""
+    def _ensure_pf_anchor_config(self):
+        """Ensure pf.conf loads our anchor (one-time setup)"""
         try:
-            current = HOSTS_PATH.read_text()
-            if MUTE_START_MARKER in current:
-                start = current.index(MUTE_START_MARKER)
-                end = current.index(MUTE_END_MARKER) + len(MUTE_END_MARKER)
-                clean_content = current[:start].rstrip() + current[end+1:].lstrip()
-                HOSTS_PATH.write_text(clean_content)
+            pf_conf_content = PF_CONF.read_text()
+            anchor_line = f"anchor \"{PFCTL_ANCHOR}\""
+
+            if anchor_line not in pf_conf_content:
+                print("📝 Adding mute anchor to pf.conf...")
+                # Add anchor before the first rdr-anchor or at the end
+                lines = pf_conf_content.split('\n')
+                insert_pos = len(lines)
+
+                for i, line in enumerate(lines):
+                    if line.strip().startswith("rdr-anchor") or line.strip().startswith("anchor "):
+                        insert_pos = i
+                        break
+
+                lines.insert(insert_pos, anchor_line)
+                PF_CONF.write_text('\n'.join(lines))
+                print("✅ pf.conf updated")
         except Exception as e:
-            print(f"Failed to clean hosts: {e}")
+            print(f"⚠️  Could not update pf.conf: {e}")
+            print("    (This may cause issues, but will try to continue)")
 
     def _apply_blocks(self) -> bool:
-        """Apply blocks to hosts file"""
+        """Apply pfctl blocking rules"""
         assert not self.is_muted, "Already muted"
 
-        # Read from backup as base
-        try:
-            if not HOSTS_BACKUP.exists():
-                print("⚠️  No backup found, creating one...")
-                if not self._create_backup():
-                    return False
+        # Ensure pf.conf has our anchor configured
+        self._ensure_pf_anchor_config()
 
-            base_content = HOSTS_BACKUP.read_text().rstrip()
-        except Exception as e:
-            rumps.alert("Error", f"Failed to read hosts backup: {e}")
+        # Load domains and resolve to IPs
+        domains = load_blocklist()
+        self.current_domains = domains
+
+        print(f"🔍 Resolving {len(domains)} domains to IP addresses...")
+        ips = self._resolve_domains_to_ips(domains)
+
+        if not ips:
+            rumps.alert("Error", "Failed to resolve any domains to IPs")
             return False
 
-        # Load domains and add blocks
-        domains = load_blocklist()
-        blocks = [
+        print(f"🎯 Blocking {len(ips)} unique IP addresses")
+
+        # Ensure anchor directory exists
+        PF_RULES_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+        # Generate pfctl rules
+        rules = [
+            f"# Mute blocking rules - generated at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+            f"# Blocking {len(domains)} domains ({len(ips)} unique IPs)",
             "",
-            MUTE_START_MARKER,
-            f"# Muted at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
         ]
-        for domain in domains:
-            blocks.append(f"127.0.0.1\t{domain}")
-        blocks.append(MUTE_END_MARKER)
+        for ip in sorted(ips):
+            rules.append(f"block drop quick from any to {ip}")
 
-        new_content = base_content + "\n" + "\n".join(blocks) + "\n"
-
-        # Write new hosts file
+        # Write rules to anchor file
         try:
-            HOSTS_PATH.write_text(new_content)
+            PF_RULES_PATH.write_text("\n".join(rules) + "\n")
+        except Exception as e:
+            print(f"Failed to write pfctl rules: {e}")
+            return False
+
+        # Load rules into pfctl
+        try:
+            subprocess.run(["pfctl", "-a", PFCTL_ANCHOR, "-f", str(PF_RULES_PATH)],
+                          capture_output=True, check=True)
+            # Enable pfctl
+            subprocess.run(["pfctl", "-e"], capture_output=True, check=False)
+            print("✅ pfctl rules loaded and enabled")
 
             # Verify it worked
             if not self._verify_blocks():
                 print("⚠️  Blocks may not be working properly")
 
             return True
-        except Exception as e:
-            print(f"Failed to write hosts file: {e}")
+        except subprocess.CalledProcessError as e:
+            print(f"Failed to load pfctl rules: {e.stderr.decode()}")
             return False
 
     def _remove_blocks(self) -> bool:
-        """Restore hosts from backup"""
+        """Remove pfctl blocking rules"""
         assert self.is_muted, "Not muted"
 
+        # Stop refresh thread
+        if self.refresh_thread and self.refresh_thread.is_alive():
+            self.stop_refresh = True
+            self.refresh_thread.join(timeout=2)
+
         try:
-            if HOSTS_BACKUP.exists():
-                shutil.copy2(HOSTS_BACKUP, HOSTS_PATH)
-                print("✅ Restored clean hosts from backup")
-                return True
-            else:
-                print("⚠️  No backup found, attempting to clean manually")
-                self._clean_hosts()
-                return True
-        except Exception as e:
-            print(f"Failed to restore hosts: {e}")
+            subprocess.run(["pfctl", "-a", PFCTL_ANCHOR, "-F", "all"],
+                          capture_output=True, check=True)
+            print("✅ Removed pfctl blocking rules")
+            return True
+        except subprocess.CalledProcessError as e:
+            print(f"Failed to remove pfctl rules: {e.stderr.decode()}")
             return False
 
     def _verify_blocks(self) -> bool:
-        """Verify blocks are working by checking if a domain resolves to 127.0.0.1"""
+        """Verify pfctl rules are loaded"""
         try:
-            import socket
-            # Test with twitter.com
-            result = socket.gethostbyname("twitter.com")
-            is_blocked = result == "127.0.0.1"
-            if is_blocked:
-                print("✅ Blocks verified working")
+            result = subprocess.run(["pfctl", "-a", PFCTL_ANCHOR, "-s", "rules"],
+                                   capture_output=True, text=True, check=True)
+            rule_count = len([line for line in result.stdout.split('\n')
+                            if line.strip() and not line.startswith('#')])
+            if rule_count > 0:
+                print(f"✅ Verified {rule_count} blocking rules active")
+                return True
             else:
-                print(f"⚠️  twitter.com resolved to {result} instead of 127.0.0.1")
-            return is_blocked
+                print("⚠️  No blocking rules found in anchor")
+                return False
         except Exception as e:
             print(f"⚠️  Could not verify blocks: {e}")
             return False
+
+    def _start_refresh_thread(self):
+        """Start background thread to refresh IPs every 15 minutes"""
+        def refresh_loop():
+            while not self.stop_refresh:
+                # Sleep for 15 minutes (900 seconds), checking every second for stop signal
+                for _ in range(900):
+                    if self.stop_refresh:
+                        return
+                    time.sleep(1)
+
+                if not self.stop_refresh and self.is_muted:
+                    print("🔄 Refreshing IP addresses...")
+                    ips = self._resolve_domains_to_ips(self.current_domains)
+                    if ips:
+                        # Regenerate rules
+                        rules = [
+                            f"# Mute blocking rules - refreshed at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+                            f"# Blocking {len(self.current_domains)} domains ({len(ips)} unique IPs)",
+                            "",
+                        ]
+                        for ip in sorted(ips):
+                            rules.append(f"block drop quick from any to {ip}")
+
+                        try:
+                            PF_RULES_PATH.write_text("\n".join(rules) + "\n")
+                            subprocess.run(["pfctl", "-a", PFCTL_ANCHOR, "-f", str(PF_RULES_PATH)],
+                                         capture_output=True, check=True)
+                            print(f"✅ Refreshed {len(ips)} IP addresses")
+                        except Exception as e:
+                            print(f"⚠️  Failed to refresh rules: {e}")
+
+        self.stop_refresh = False
+        self.refresh_thread = threading.Thread(target=refresh_loop, daemon=True)
+        self.refresh_thread.start()
+        print("🔄 Started IP refresh thread (15 min interval)")
 
     def _start_session(self, minutes: Optional[int] = None):
         """Start a focus session"""
@@ -316,12 +394,7 @@ class MuteApp(rumps.App):
             rumps.alert("Already Focused", "End current session first")
             return
 
-        # Create backup if needed
-        if not self._create_backup():
-            rumps.alert("Error", "Failed to backup hosts file")
-            return
-
-        # Apply blocks
+        # Apply pfctl blocks
         if not self._apply_blocks():
             rumps.alert("Error", "Failed to apply blocks")
             return
@@ -329,6 +402,9 @@ class MuteApp(rumps.App):
         self.is_muted = True
         self.title = "🔇 Mute"
         self._update_menu_state()
+
+        # Start background IP refresh thread
+        self._start_refresh_thread()
 
         # Setup timer if duration specified
         if minutes:
