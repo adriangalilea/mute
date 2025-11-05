@@ -238,6 +238,7 @@ class MuteApp(rumps.App):
             rumps.MenuItem("1 hour", callback=self.start_60),
             rumps.MenuItem("2 hours", callback=self.start_120),
             rumps.MenuItem("Until tomorrow", callback=self.start_until_tomorrow),
+            rumps.MenuItem("Forever", callback=self.start_forever),
             rumps.separator,
             rumps.MenuItem("End Session", callback=None),  # Greyed out initially
             rumps.separator,
@@ -263,6 +264,7 @@ class MuteApp(rumps.App):
             self.menu["1 hour"].set_callback(None)
             self.menu["2 hours"].set_callback(None)
             self.menu["Until tomorrow"].set_callback(None)
+            self.menu["Forever"].set_callback(None)
             self.menu["End Session"].set_callback(self.end_session)
         else:
             # Not in session: enable start options, disable end
@@ -270,6 +272,7 @@ class MuteApp(rumps.App):
             self.menu["1 hour"].set_callback(self.start_60)
             self.menu["2 hours"].set_callback(self.start_120)
             self.menu["Until tomorrow"].set_callback(self.start_until_tomorrow)
+            self.menu["Forever"].set_callback(self.start_forever)
             self.menu["End Session"].set_callback(None)
 
     def _setup_plist(self):
@@ -329,7 +332,10 @@ class MuteApp(rumps.App):
             self._start_refresh_thread()
 
             # Restart timer if needed
-            if self.end_time:
+            if session_type == "forever":
+                # No timer for forever sessions
+                print("✅ Session restored (forever)")
+            elif self.end_time:
                 if datetime.now() >= self.end_time:
                     # Session expired while app was closed
                     print("⏰ Session expired, ending...")
@@ -343,7 +349,7 @@ class MuteApp(rumps.App):
                     self.timer = rumps.Timer(self.update_timer, 1)
                 self.timer.start()
 
-            print(f"✅ Session restored ({session_type})")
+                print(f"✅ Session restored ({session_type})")
         except Exception as e:
             print(f"❌ Failed to restore session: {e}")
             self.end_session(None)
@@ -547,7 +553,7 @@ class MuteApp(rumps.App):
         self.refresh_thread.start()
         print("🔄 Started IP refresh thread (15 min interval)")
 
-    def _start_session(self, minutes: Optional[int] = None):
+    def _start_session(self, minutes: Optional[int] = None, session_type: Optional[str] = None):
         """Start a focus session"""
         if self.is_muted:
             rumps.alert("Already Focused", "End current session first")
@@ -567,10 +573,18 @@ class MuteApp(rumps.App):
 
         # Determine session type and times
         start_time = datetime.now()
-        session_type = "timed"
 
-        # Setup timer if duration specified
-        if minutes:
+        # Handle different session types
+        if session_type == "forever":
+            # Forever blocking - no end time, no timer
+            self.end_time = None
+            try:
+                rumps.notification("Focus Started", "", "Muting forever")
+            except:
+                print("✅ Focus started forever (manual stop only)")
+        elif minutes:
+            # Timed session
+            session_type = "timed"
             self.end_time = start_time + timedelta(minutes=minutes)
             if self.timer:
                 self.timer.stop()
@@ -581,6 +595,7 @@ class MuteApp(rumps.App):
             except:
                 print(f"✅ Focus started for {minutes} minutes")
         else:
+            # Until tomorrow
             session_type = "until_tomorrow"
             try:
                 rumps.notification("Focus Started", "", "Muting until tomorrow")
@@ -637,6 +652,9 @@ class MuteApp(rumps.App):
 
     def start_until_tomorrow(self, _):
         self._start_session()
+
+    def start_forever(self, _):
+        self._start_session(session_type="forever")
 
     def end_session(self, _):
         """End the current focus session"""
