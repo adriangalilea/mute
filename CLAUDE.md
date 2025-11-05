@@ -1,22 +1,19 @@
 @README.md
 
-# Completed Research
+# Implementation Status
 
-## Blocking Approaches
-- [x] Deep research on reliable blocking methods for macOS
-  - Analyzed hosts file limitations (DoH bypass, browser caching)
-  - Evaluated pfctl, Network Extension, DNS servers, proxies, browser extensions
-  - Documented contingency plans if pfctl fails
-  - See [docs/blocking-approaches.md](docs/blocking-approaches.md) for full analysis
+## Current: Python + rumps + pfctl
+- ✅ Works, kernel-level blocking, periodic IP refresh
+- ✅ Grouped config, persistent sessions, forever blocking
+- ❌ Disables Private Relay (pfctl limitation)
 
-**Next:** Implement pfctl + periodic DNS resolution approach (testing phase)
+## Future Direction
 
-# Pending Tasks
+**Most likely:** Native Swift app with Network Extension API
+- Preserves Private Relay (proper Apple integration)
+- NEDNSProxyProvider for DNS-level filtering
+- See [docs/blocking-approaches.md](docs/blocking-approaches.md) for technical details
 
-## Library Investigation
+**Alternative:** If staying with pfctl → Rust (type-safe, better ergonomics than subprocess)
 
-- [ ] Deep dive into [stackit](https://github.com/Bbalduzz/stackit) codebase
-  - Full code review for security/malware
-  - Compare API design vs rumps
-  - Test SwiftUI-inspired components
-  - Evaluate if refactor from rumps → stackit is worth it
+**stackit investigation:** Complete. Staying with rumps (Python is temporary anyway).
