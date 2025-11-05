@@ -187,6 +187,17 @@ def cleanup_handler():
     """Cleanup function called on exit"""
     global app_instance
     if app_instance and app_instance.is_muted:
+        # Check if this is a forever session
+        state = load_state()
+        if state and state.get("session_type") == "forever":
+            print("\n⚠️  Forever session - blocks remain active")
+            print("   (Restart app to manage session)")
+            # Stop refresh thread only, leave pfctl rules in place
+            if app_instance.refresh_thread and app_instance.refresh_thread.is_alive():
+                app_instance.stop_refresh = True
+            return
+
+        # Timed/until_tomorrow sessions: cleanup normally
         print("\n🧹 Cleaning up...")
         remove_pfctl_rules()
         # Stop refresh thread if running

@@ -58,7 +58,7 @@ On first run, the template from the repo is copied to your config directory.
 
 - ✅ **Grouped config format (INI)** - sites.ini with [social], [video], [news] groups
 - ✅ **Persistent sessions** - survives app restarts, restores active blocks mid-session
-- ✅ **Forever blocking** - no end time, manual stop only, survives restarts
+- ✅ **Forever blocking** - no end time, manual stop only, survives app kill/reboot
 
 - **macOS Shortcuts integration**:
   - Create Shortcuts actions for "Start 25min focus", "Start 2hr focus", etc.
