@@ -1,5 +1,16 @@
 @README.md
 
+# Completed Research
+
+## Blocking Approaches
+- [x] Deep research on reliable blocking methods for macOS
+  - Analyzed hosts file limitations (DoH bypass, browser caching)
+  - Evaluated pfctl, Network Extension, DNS servers, proxies, browser extensions
+  - Documented contingency plans if pfctl fails
+  - See [docs/blocking-approaches.md](docs/blocking-approaches.md) for full analysis
+
+**Next:** Implement pfctl + periodic DNS resolution approach (testing phase)
+
 # Pending Tasks
 
 ## Library Investigation

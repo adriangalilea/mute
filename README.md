@@ -27,19 +27,18 @@ Edit `~/.config/mute/blocklist.txt` (or `$XDG_CONFIG_HOME/mute/blocklist.txt`) t
 
 On first run, the template from the repo is copied to your config directory.
 
+## Known Limitations
+
+**Current approach (hosts file) doesn't block modern browsers:**
+- Safari/Chrome/Firefox bypass via DNS-over-HTTPS
+- Browser caching + persistent connections
+- Only blocks terminal tools (curl, wget)
+
+**Next step:** Testing pfctl-based approach (kernel-level IP blocking)
+
+**If pfctl proves insufficient:** See [blocking-approaches.md](docs/blocking-approaches.md) for research on Network Extension alternatives (requires Swift development)
+
 ## TODO
-
-- **Critical: Browsers bypass /etc/hosts entirely**
-  - Safari: Always ignores hosts file
-  - Chrome/SigmaOS: Can browse despite blocks (DNS over HTTPS, persistent connections, browser cache)
-  - DNS flush commands (`dscacheutil`, `killall mDNSResponder`) do nothing
-  - Even force quit + reopen doesn't always work
-  - **hosts file approach is fundamentally broken for modern browsers**
-
-- **Solution needed**:
-  - Implement pfctl packet filter firewall rules (like SelfControl does)
-  - Or use local proxy server to intercept all traffic
-  - hosts file only reliable for terminal/system apps, not browsers
 
 - **macOS Shortcuts integration**:
   - Create Shortcuts actions for "Start 25min focus", "Start 2hr focus", etc.
