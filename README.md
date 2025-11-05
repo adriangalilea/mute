@@ -15,6 +15,7 @@ Block distracting websites at the network level. No browser extensions, no DNS t
 - ✅ **Persistent sessions** - state saved to disk, survives app restarts
 - ✅ **Smart restore** - calculates remaining time on restart, expires old sessions properly
 - ✅ **Forever blocking** - no end time, blocks persist through kill/reboot, manual stop only
+- ✅ **XDG Base Directory** - respects `XDG_CONFIG_HOME` and `XDG_STATE_HOME` on macOS
 
 ## How It Works
 
