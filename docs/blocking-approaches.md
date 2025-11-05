@@ -184,6 +184,85 @@ response = json.loads(proc.stdout.readline())
 
 ---
 
-## Status: Testing pfctl approach first
+## pfctl Investigation Results (2025-11-05)
 
-If pfctl's 95% reliability proves insufficient, revisit this doc and choose Hybrid vs Full Swift based on project priorities at that time.
+### Python subprocess Implementation (PR #2)
+
+**Status:** ✅ Works but has critical limitations
+
+**What we built:**
+- DNS resolution → IP addresses (IPv4 + IPv6)
+- Generate pfctl rules: `block drop quick from any to <IP>`
+- Auto-configure `/etc/pf.conf` with anchor
+- Reload pf.conf to activate rules
+- Background thread refreshes IPs every 15 min
+- Functional verification (curl test instead of parsing output)
+
+**Testing:**
+- ✅ Blocks twitter.com, x.com (confirmed via curl)
+- ✅ Kernel-level blocking (actually stops traffic)
+- ✅ ~430 lines Python + rumps menu bar
+
+**Critical Issues:**
+
+1. **Disables Apple Private Relay**
+   - pfctl at kernel level conflicts with Private Relay
+   - Not a bug - fundamental limitation of packet filtering
+   - User must disable Private Relay manually to use mute
+
+2. **Text Output Parsing is Garbage**
+   - `pfctl -s rules -v` outputs unstructured text
+   - Regex parsing of "Evaluations: N" is fragile
+   - Had to use functional tests (curl) instead
+   - No proper error codes or machine-readable output
+
+### Rust pfctl-rs Investigation
+
+**Library:** [pfctl-rs](https://github.com/mullvad/pfctl-rs) by Mullvad VPN
+
+**Tested:** 2025-11-05 with proof-of-concept
+
+**Proof of concept code:** [docs/rust-pfctl-poc/](rust-pfctl-poc/) (~70 lines)
+
+**What we tested:**
+- Direct ioctl syscalls to `/dev/pf` device
+- Type-safe API (no text parsing)
+- Proper error handling via Result types
+- ~70 lines Rust for equivalent functionality
+
+**Results:**
+- ✅ Blocking works (confirmed via curl timeout)
+- ❌ **Also disables Private Relay** (same as subprocess)
+- ✅ Much cleaner code (no regex, type-safe)
+- ✅ Battle-tested (used by Mullvad VPN in production)
+
+**Conclusion:** pfctl (CLI or ioctl) always disables Private Relay. It's a macOS limitation, not implementation detail.
+
+### Why WireGuard Doesn't Disable Private Relay
+
+WireGuard uses **virtual network interfaces** (`utun` devices), not packet filtering:
+- Traffic routes through interface, not filtered
+- Operates at different OSI layer than pfctl
+- Doesn't conflict with Private Relay's routing
+
+### Future Option: Rust + pfctl-rs
+
+**Status:** Potential alternative for better ergonomics
+
+**Why consider Rust:**
+1. **Type-safe API** - No text parsing, proper types
+2. **Better errors** - Result types instead of exit codes
+3. **Cleaner code** - Builder patterns, no regex
+4. **Production-tested** - Used by Mullvad VPN
+5. **Future-proof** - Modern, maintained library
+
+**Proof of concept:** See `docs/rust-pfctl-poc/` for minimal working example (~70 lines)
+
+**Trade-offs:**
+- ✅ Much better ergonomics than subprocess
+- ✅ Type-safe, maintainable
+- ❌ Still disables Private Relay (same limitation)
+- ❌ Requires Rust toolchain
+- ❌ Need menu bar UI crate (more research needed)
+
+**Decision:** Not yet made. Python implementation works. May revisit Rust for better code quality and maintainability.

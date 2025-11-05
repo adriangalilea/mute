@@ -1,0 +1,8 @@
+[package]
+name = "pfctl-test"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+pfctl = "0.4"
+nix = { version = "0.27", features = ["user"] }
