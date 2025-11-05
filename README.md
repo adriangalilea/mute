@@ -9,6 +9,13 @@
 
 Block distracting websites at the network level. No browser extensions, no DNS tricks, no bypasses.
 
+## Features
+
+- ✅ **Grouped config (INI)** - organize sites into categories ([social], [video], [nsfw])
+- ✅ **Persistent sessions** - state saved to disk, survives app restarts
+- ✅ **Smart restore** - calculates remaining time on restart, expires old sessions properly
+- ✅ **Forever blocking** - no end time, blocks persist through kill/reboot, manual stop only
+
 ## How It Works
 
 **Current:** Python + pfctl (kernel-level packet filtering)
@@ -50,13 +57,6 @@ youtube.com
 ```
 
 On first run, the template from the repo is copied to your config directory.
-
-## Features
-
-- ✅ **Grouped config (INI)** - organize sites into categories ([social], [video], [nsfw])
-- ✅ **Persistent sessions** - state saved to disk, survives app restarts
-- ✅ **Smart restore** - calculates remaining time on restart, expires old sessions properly
-- ✅ **Forever blocking** - no end time, blocks persist through kill/reboot, manual stop only
 
 ## TODO
 
