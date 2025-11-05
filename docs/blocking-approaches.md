@@ -267,6 +267,26 @@ WireGuard uses **virtual network interfaces** (`utun` devices), not packet filte
 
 **Decision:** Not yet made. Python implementation works. May revisit Rust for better code quality and maintainability.
 
+### py-pf Investigation
+
+**Library:** [py-pf](https://github.com/dotpy/py-pf) - Python wrapper for pfctl
+
+**Status:** ❌ Dropped immediately - OpenBSD-only, won't work on macOS
+
+### BlockMaster Reference
+
+**Project:** [BlockMaster](https://github.com/bythebug/Block-Master-System-Level-Website-Blocker)
+
+**Approach:** "Dual-layer" hosts file + pfctl blocking
+
+**Marketing claims:** "Cannot be bypassed by DNS-over-HTTPS" (false)
+
+**Reality:**
+- hosts file doesn't work against DoH (already documented above)
+- One-time DNS resolution → stale IPs (we do periodic refresh)
+- DNS cache flushing irrelevant (we use pfctl, not hosts file)
+- No functional verification (just checks pfctl status)
+
 ---
 
 ## The Real Solution: Network Extension API
