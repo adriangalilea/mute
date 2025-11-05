@@ -61,19 +61,15 @@ www.reddit.com
         os.chown(BLOCKLIST_PATH, actual_uid, actual_gid)
 
     # Load blocklist from user config
-    try:
-        with open(BLOCKLIST_PATH) as f:
-            for line in f:
-                line = line.strip()
-                # Skip comments and empty lines
-                if line and not line.startswith('#'):
-                    domains.append(line)
-        print(f"📋 Loaded {len(domains)} domains from {BLOCKLIST_PATH}")
-    except Exception as e:
-        print(f"⚠️  Failed to load blocklist: {e}")
-        # Fallback to minimal list
-        domains = ["twitter.com", "facebook.com", "youtube.com", "reddit.com"]
+    with open(BLOCKLIST_PATH) as f:
+        for line in f:
+            line = line.strip()
+            # Skip comments and empty lines
+            if line and not line.startswith('#'):
+                domains.append(line)
 
+    assert len(domains) > 0, f"Blocklist is empty: {BLOCKLIST_PATH}"
+    print(f"📋 Loaded {len(domains)} domains from {BLOCKLIST_PATH}")
     return domains
 
 # Global app instance for cleanup
@@ -239,34 +235,39 @@ class MuteApp(rumps.App):
 
     def _ensure_pf_anchor_config(self):
         """Ensure pf.conf loads our anchor (one-time setup)"""
-        try:
-            pf_conf_content = PF_CONF.read_text()
-            anchor_line = f"anchor \"{PFCTL_ANCHOR}\""
+        pf_conf_content = PF_CONF.read_text()
+        anchor_line = f"anchor \"{PFCTL_ANCHOR}\""
 
-            if anchor_line not in pf_conf_content:
-                print("📝 Adding mute anchor to pf.conf...")
-                # Add anchor after dummynet-anchor, before filtering anchors
-                # Order: scrub > nat > rdr > dummynet > [OUR ANCHOR] > filtering
-                lines = pf_conf_content.split('\n')
-                insert_pos = len(lines)
+        if anchor_line not in pf_conf_content:
+            print("📝 Adding mute anchor to pf.conf...")
+            # Add anchor after dummynet-anchor, before filtering anchors
+            # Order: scrub > nat > rdr > dummynet > [OUR ANCHOR] > filtering
+            lines = pf_conf_content.split('\n')
+            insert_pos = len(lines)
 
-                # Try to insert after dummynet-anchor
+            # Try to insert after dummynet-anchor
+            for i, line in enumerate(lines):
+                if line.strip().startswith("dummynet-anchor"):
+                    insert_pos = i + 1
+                    break
+            else:
+                # Fallback: insert before first filtering anchor
                 for i, line in enumerate(lines):
-                    if line.strip().startswith("dummynet-anchor"):
-                        insert_pos = i + 1
+                    if line.strip().startswith("anchor "):
+                        insert_pos = i
                         break
-                else:
-                    # Fallback: insert before first filtering anchor
-                    for i, line in enumerate(lines):
-                        if line.strip().startswith("anchor "):
-                            insert_pos = i
-                            break
 
-                lines.insert(insert_pos, anchor_line)
-                PF_CONF.write_text('\n'.join(lines))
-                print("✅ pf.conf updated")
-        except Exception as e:
-            raise RuntimeError(f"Failed to update pf.conf: {e}") from e
+            lines.insert(insert_pos, anchor_line)
+            PF_CONF.write_text('\n'.join(lines))
+
+            # Verify anchor was written
+            updated_content = PF_CONF.read_text()
+            assert anchor_line in updated_content, "Failed to add anchor to pf.conf"
+
+            # Reload pf.conf to activate anchor
+            print("🔄 Reloading pf.conf...")
+            subprocess.run(["pfctl", "-f", str(PF_CONF)], capture_output=True, check=True)
+            print("✅ pf.conf updated and reloaded")
 
     def _apply_blocks(self) -> bool:
         """Apply pfctl blocking rules"""
@@ -282,9 +283,7 @@ class MuteApp(rumps.App):
         print(f"🔍 Resolving {len(domains)} domains to IP addresses...")
         ips = self._resolve_domains_to_ips(domains)
 
-        if not ips:
-            rumps.alert("Error", "Failed to resolve any domains to IPs")
-            return False
+        assert len(ips) > 0, f"Failed to resolve any domains to IPs (checked {len(domains)} domains)"
 
         print(f"🎯 Blocking {len(ips)} unique IP addresses")
 
@@ -301,28 +300,20 @@ class MuteApp(rumps.App):
             rules.append(f"block drop quick from any to {ip}")
 
         # Write rules to anchor file
-        try:
-            PF_RULES_PATH.write_text("\n".join(rules) + "\n")
-        except Exception as e:
-            print(f"Failed to write pfctl rules: {e}")
-            return False
+        PF_RULES_PATH.write_text("\n".join(rules) + "\n")
 
         # Load rules into pfctl
-        try:
-            subprocess.run(["pfctl", "-a", PFCTL_ANCHOR, "-f", str(PF_RULES_PATH)],
-                          capture_output=True, check=True)
-            # Enable pfctl
-            subprocess.run(["pfctl", "-e"], capture_output=True, check=False)
-            print("✅ pfctl rules loaded and enabled")
+        subprocess.run(["pfctl", "-a", PFCTL_ANCHOR, "-f", str(PF_RULES_PATH)],
+                      capture_output=True, check=True)
+        # Enable pfctl
+        subprocess.run(["pfctl", "-e"], capture_output=True, check=False)
+        print("✅ pfctl rules loaded and enabled")
 
-            # Verify it worked
-            if not self._verify_blocks():
-                print("⚠️  Blocks may not be working properly")
+        # Verify it worked
+        verified = self._verify_blocks()
+        assert verified, "pfctl rules loaded but verification failed"
 
-            return True
-        except subprocess.CalledProcessError as e:
-            print(f"Failed to load pfctl rules: {e.stderr.decode()}")
-            return False
+        return True
 
     def _remove_blocks(self) -> bool:
         """Remove pfctl blocking rules"""
@@ -343,21 +334,42 @@ class MuteApp(rumps.App):
             return False
 
     def _verify_blocks(self) -> bool:
-        """Verify pfctl rules are loaded"""
-        try:
-            result = subprocess.run(["pfctl", "-a", PFCTL_ANCHOR, "-s", "rules"],
-                                   capture_output=True, text=True, check=True)
-            rule_count = len([line for line in result.stdout.split('\n')
-                            if line.strip() and not line.startswith('#')])
-            if rule_count > 0:
-                print(f"✅ Verified {rule_count} blocking rules active")
-                return True
-            else:
-                print("⚠️  No blocking rules found in anchor")
-                return False
-        except Exception as e:
-            print(f"⚠️  Could not verify blocks: {e}")
-            return False
+        """Verify pfctl rules work by functional test"""
+        import re
+
+        # Check rules exist in anchor
+        result = subprocess.run(["pfctl", "-a", PFCTL_ANCHOR, "-s", "rules"],
+                               capture_output=True, text=True, check=True)
+
+        lines = result.stdout.split('\n')
+        rule_count = len([line for line in lines
+                         if line.strip() and line.startswith('block drop quick')])
+
+        assert rule_count > 0, "No blocking rules found in anchor"
+
+        # Functional test: Try to connect to blocked IP, should timeout
+        first_rule = next((line for line in lines if line.startswith('block drop quick')), None)
+        assert first_rule, "No block rules found"
+
+        # Extract IP from rule like "block drop quick inet from any to 172.66.0.227"
+        match = re.search(r'to (\S+)$', first_rule)
+        assert match, "Could not parse IP from rule"
+
+        test_ip = match.group(1)
+        print(f"🧪 Testing block on {test_ip}...")
+
+        # Try to connect - should timeout or fail
+        result = subprocess.run(
+            ["curl", "-m", "2", "--connect-timeout", "2", f"http://{test_ip}"],
+            capture_output=True
+        )
+
+        # Exit codes: 7 = failed to connect, 28 = timeout
+        assert result.returncode in [7, 28], \
+            f"Blocking failed - connection succeeded (exit code {result.returncode})"
+
+        print(f"✅ Verified {rule_count} blocking rules active (connection blocked)")
+        return True
 
     def _start_refresh_thread(self):
         """Start background thread to refresh IPs every 15 minutes"""

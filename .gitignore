@@ -3,3 +3,7 @@ __pycache__/
 *.pyc
 .DS_Store
 uv.lock
+
+# Rust
+target/
+Cargo.lock
