@@ -54,40 +54,27 @@ youtube.com
 
 On first run, the template from the repo is copied to your config directory.
 
+## Features
+
+- ✅ **Grouped config (INI)** - organize sites into categories ([social], [video], [nsfw])
+- ✅ **Persistent sessions** - state saved to disk, survives app restarts
+- ✅ **Smart restore** - calculates remaining time on restart, expires old sessions properly
+- ✅ **Forever blocking** - no end time, blocks persist through kill/reboot, manual stop only
+
 ## TODO
 
-- ✅ **Grouped config format (INI)** - sites.ini with [social], [video], [news] groups
-- ✅ **Persistent sessions** - survives app restarts, restores active blocks mid-session
-- ✅ **Forever blocking** - no end time, manual stop only, survives app kill/reboot
+- **Per-group toggle** - enable/disable categories individually (block [nsfw] only, allow [social])
 
-- **macOS Shortcuts integration**:
-  - Create Shortcuts actions for "Start 25min focus", "Start 2hr focus", etc.
-  - Automation triggers (time-based, location-based)
+- **Scheduled blocking** - auto-activate during time windows (Mon-Fri 9-5), smart restore checks if currently in schedule
 
-- **Siri voice commands**:
-  - Voice activation: "Hey Siri, mute distractions"
-  - Quick toggling without opening menu bar
+- **Auto-start on login** - launchd plist or Login Items integration
 
-- **Run permanently on macOS**:
-  - Create launchd plist to run on login
-  - Or Login Items in System Settings
-  - Keep running in menu bar persistently
+- **Pause feature** - temporarily disable for 5/15 minutes, auto-resume
 
-- **Serve static site on blocked domains (instead of 127.0.0.1 404)**:
-  - Run local web server on :80 when muted
-  - Show motivational page: "You're focusing. Get back to work."
-  - Display session time remaining
-  - Show your goals/reasons for blocking
-  - Alternative: Pomodoro timer, task list, or meditation prompt
-  - Simple HTML/CSS, no fancy frameworks
+- **macOS Shortcuts integration** - actions for "Start 25min", "Start 2hr", automation triggers
 
-- **Per-group toggle** - enable/disable individual groups (block only [social], not [video])
+- **Siri voice commands** - "Hey Siri, mute distractions" voice activation
 
-- **Scheduled blocking** - auto-activate during work hours (Mon-Fri 9-5), custom schedules in config
+- **Serve static site on blocked domains** - local web server shows motivational page instead of timeout
 
-- **Prevent easy toggle-off (reduce temptation)**:
-  - Add delay before ending session (e.g., 30 second countdown)
-  - Require password/confirmation to end early
-  - Log all start/end times to shame yourself
-  - Optional: Hide "End Session" button entirely (force quit = restore)
-  - Consider: App hiding/removal protection
+- **Prevent easy toggle-off** - delay before ending, password confirmation, log start/end times
